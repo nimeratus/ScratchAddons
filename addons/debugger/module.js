@@ -27,6 +27,7 @@ const pauseThread = (thread) => {
 
   const pauseState = {
     time: vm.runtime.currentMSecs,
+    frozen: false,
     status: thread.status,
   };
   pausedThreadState.set(thread, pauseState);
@@ -49,11 +50,14 @@ const freezeThreadIfPaused = (thread) => {
     //    very hot functions to be deoptimized.
     // Trapping sequencer.stepThread to no-op for a paused thread causes Scratch's sequencer
     //    to waste 24ms of CPU time every frame because it thinks a thread is running.
-    if (thread.status !== STATUS_PROMISE_WAIT) {
+    if (thread.status !== STATUS_PROMISE_WAIT || !pauseState.frozen) {
       // We'll record the change so we can properly resume the thread, but the thread must still be paused for now.
+      // Also record the status if the thread was unfrozen and a block put it into the waiting state.
       pauseState.status = thread.status;
       thread.status = STATUS_PROMISE_WAIT;
     }
+
+    pauseState.frozen = true;
   }
 };
 
@@ -62,6 +66,8 @@ const unfreezePausedThread = (thread) => {
   if (pauseState) {
     compensateForTimePassedWhilePaused(thread, pauseState);
     thread.status = pauseState.status;
+
+    pauseState.frozen = false;
   }
 };
 
@@ -151,7 +157,7 @@ export const getRunningThread = () => steppingThread;
 // https://github.com/scratchfoundation/scratch-vm/blob/0e86a78a00db41af114df64255e2cd7dd881329f/src/engine/sequencer.js#L179
 // Returns if we should continue executing this thread.
 const singleStepThread = (thread) => {
-  if (thread.status === STATUS_DONE) {
+  if (thread.status === STATUS_DONE || thread.status === STATUS_PROMISE_WAIT) {
     return false;
   }
 
