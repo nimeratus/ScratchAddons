@@ -111,7 +111,7 @@ const stepUnsteppedThreads = (lastSteppedThread) => {
       }
     }
   }
-  vm.runtime.threads = threads.filter(thread => !isThreadStopped(thread));
+  vm.runtime.threads = threads.filter((thread) => !isThreadStopped(thread));
 };
 
 export const setPaused = (_paused) => {
@@ -184,7 +184,7 @@ const singleStepThread = (thread) => {
     }
   }
 
-  pauseNewThreads  = preventStoppingPausedThreads = true;
+  pauseNewThreads = preventStoppingPausedThreads = true;
   vm.runtime.sequencer.activeThread = thread;
 
   /*
@@ -272,7 +272,8 @@ const getRealStatus = (thread) => {
 };
 
 export const isThreadStopped = (thread) => {
-  const isStackEmpty = thread.stack.length === 0 || (thread.stack.length === 1 && thread.stack[0] === fakeBlockIDtoPreventDespawning);
+  const isStackEmpty =
+    thread.stack.length === 0 || (thread.stack.length === 1 && thread.stack[0] === fakeBlockIDtoPreventDespawning);
   if (isStackEmpty) return true;
 
   const pauseState = pausedThreadState.get(thread);
@@ -357,7 +358,7 @@ export const singleStep = () => {
       }
     }
     // Delete stopped threads
-    vm.runtime.threads = vm.runtime.threads.filter(thread => !isThreadStopped(thread));
+    vm.runtime.threads = vm.runtime.threads.filter((thread) => !isThreadStopped(thread));
     // Move all threads forward one frame in time. For blocks like `wait () seconds`
     for (const thread of vm.runtime.threads) {
       if (pausedThreadState.has(thread)) {
@@ -435,7 +436,7 @@ export const setup = (addon) => {
 
   // Prevent paused threads from despawning
   const originalRetireThread = vm.runtime.sequencer.retireThread;
-  vm.runtime.sequencer.retireThread = function(...args) {
+  vm.runtime.sequencer.retireThread = function (...args) {
     try {
       return originalRetireThread.apply(this, args);
     } finally {

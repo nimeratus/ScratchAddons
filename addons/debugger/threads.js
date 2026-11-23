@@ -180,7 +180,7 @@ export default async function createThreadsTab({ debug, addon, console, msg }) {
       if (isThreadStopped(thread)) {
         result.push({
           type: "thread-stopped",
-          depth
+          depth,
         });
       }
 
