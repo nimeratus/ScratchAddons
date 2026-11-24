@@ -11,6 +11,7 @@ let paused = false;
 let pausedThreadState = new WeakMap();
 let pauseNewThreads = false;
 let preventStoppingPausedThreads = false;
+let deletedClones = new WeakSet();
 
 let steppingThread = null;
 
@@ -395,7 +396,12 @@ export const setup = (addon) => {
   vm.runtime.sequencer.stepThreads = function () {
     if (isPaused()) {
       for (const thread of this.runtime.threads) {
-        freezeThreadIfPaused(thread);
+        if (!deletedClones.has(thread.target) || !isThreadStopped(thread)) {
+          freezeThreadIfPaused(thread);
+        } else {
+          // Let threads despawn early if they belong to a deleted clone
+          unfreezePausedThread(thread);
+        }
       }
       preventStoppingPausedThreads = true;
     }
@@ -443,6 +449,11 @@ export const setup = (addon) => {
       if (preventStoppingPausedThreads) freezeThreadIfPaused(args[0]);
     }
   };
+
+  // Record if a clone is deleted, to let despawning its threads
+  vm.runtime.on("targetWasRemoved", function (target) {
+    deletedClones.add(target);
+  });
 
   // Paused threads should not be counted as running when updating GUI state.
   const originalGetMonitorThreadCount = vm.runtime._getMonitorThreadCount;
