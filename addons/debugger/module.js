@@ -423,6 +423,7 @@ export const setup = (addon) => {
   const originalStartHats = vm.runtime.startHats;
   vm.runtime.startHats = function (...args) {
     const hat = args[0];
+    const restartable = vm.runtime._hats[hat]?.restartExistingThreads;
     // These hats can be manually started by the user when paused or while single stepping.
     const isUserInitiated = hat === "event_whenbroadcastreceived" || hat === "control_start_as_clone";
     if (pauseNewThreads) {
@@ -431,6 +432,8 @@ export const setup = (addon) => {
       }
       const newThreads = originalStartHats.apply(this, args);
       for (const thread of newThreads) {
+        // Don't keep the thread if it failed to start (inactive edge-activated hat blocks)
+        if (!restartable && isThreadStopped(thread)) continue;
         pauseThread(thread);
       }
       return newThreads;
