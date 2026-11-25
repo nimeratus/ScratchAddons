@@ -21,8 +21,21 @@ let audioContextStateChange = Promise.resolve();
 
 export const isPaused = () => paused;
 
+const shouldPauseThread = (thread) => {
+  if (thread.updateMonitor) return false;
+  if (isThreadStopped(thread)) {
+    const topBlock = thread.target?.blocks?._blocks?.[thread.topBlock];
+    const hatType = vm.runtime._hats[topBlock?.opcode];
+    const isRestartable = hatType?.restartExistingThreads;
+    if (isRestartable) return true;
+    // don't keep stopped threads if they can't be restarted anyways (eg. the threads made by inactive edge-activated hat blocks)
+    else return false;
+  }
+  return true;
+};
+
 const pauseThread = (thread) => {
-  if (thread.updateMonitor || pausedThreadState.has(thread)) {
+  if (!shouldPauseThread(thread) || pausedThreadState.has(thread)) {
     // Thread is already paused or shouldn't be paused.
     return;
   }
@@ -423,7 +436,6 @@ export const setup = (addon) => {
   const originalStartHats = vm.runtime.startHats;
   vm.runtime.startHats = function (...args) {
     const hat = args[0];
-    const restartable = vm.runtime._hats[hat]?.restartExistingThreads;
     // These hats can be manually started by the user when paused or while single stepping.
     const isUserInitiated = hat === "event_whenbroadcastreceived" || hat === "control_start_as_clone";
     if (pauseNewThreads) {
@@ -432,8 +444,6 @@ export const setup = (addon) => {
       }
       const newThreads = originalStartHats.apply(this, args);
       for (const thread of newThreads) {
-        // Don't keep the thread if it failed to start (inactive edge-activated hat blocks)
-        if (!restartable && isThreadStopped(thread)) continue;
         pauseThread(thread);
       }
       return newThreads;
