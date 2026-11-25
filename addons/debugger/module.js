@@ -112,7 +112,7 @@ const stepUnsteppedThreads = (lastSteppedThread) => {
       }
     }
   }
-  vm.runtime.threads = threads.filter((thread) => !isThreadStopped(thread));
+  steppingThread = null;
 };
 
 export const setPaused = (_paused) => {
@@ -153,7 +153,7 @@ export const setPaused = (_paused) => {
     const lastSteppedThread = steppingThread;
     // This must happen after the "change" event is fired to fix https://github.com/ScratchAddons/ScratchAddons/issues/4281
     stepUnsteppedThreads(lastSteppedThread);
-    steppingThread = null;
+    simulateEndOfTick();
   }
 };
 
@@ -337,35 +337,8 @@ export const singleStep = () => {
 
   // If we don't have a thread, than we are between VM steps and should search for a new thread
   if (!steppingThread) {
-    setSteppingThread(findNewSteppingThread(0));
-
-    // End of VM step, emulate one frame of time passing.
-    vm.runtime.ioDevices.clock._pausedTime += vm.runtime.currentStepTime;
-    // Skip all sounds forward by vm.runtime.currentStepTime milliseconds so it's as
-    //  if they where playing for one frame.
-    const audioContext = vm.runtime.audioEngine.audioContext;
-    for (const target of vm.runtime.targets) {
-      for (const soundId of Object.keys(target.sprite.soundBank.soundPlayers)) {
-        const soundPlayer = target.sprite.soundBank.soundPlayers[soundId];
-        if (soundPlayer.outputNode) {
-          soundPlayer.outputNode.stop(audioContext.currentTime);
-          soundPlayer._createSource();
-          soundPlayer.outputNode.start(
-            audioContext.currentTime,
-            audioContext.currentTime - soundPlayer.startingUntil + vm.runtime.currentStepTime / 1000
-          );
-          soundPlayer.startingUntil -= vm.runtime.currentStepTime / 1000;
-        }
-      }
-    }
-    // Delete stopped threads
-    vm.runtime.threads = vm.runtime.threads.filter((thread) => !isThreadStopped(thread));
-    // Move all threads forward one frame in time. For blocks like `wait () seconds`
-    for (const thread of vm.runtime.threads) {
-      if (pausedThreadState.has(thread)) {
-        pausedThreadState.get(thread).time += vm.runtime.currentStepTime;
-      }
-    }
+    // End of VM step.
+    simulateEndOfTick();
 
     // Try to run edge activated hats
     pauseNewThreads = true;
@@ -380,9 +353,41 @@ export const singleStep = () => {
     }
 
     pauseNewThreads = false;
+
+    setSteppingThread(findNewSteppingThread(0));
   }
 
   eventTarget.dispatchEvent(new CustomEvent("step"));
+};
+
+const simulateEndOfTick = () => {
+  // Emulate one frame of time passing.
+  vm.runtime.ioDevices.clock._pausedTime += vm.runtime.currentStepTime;
+  // Skip all sounds forward by vm.runtime.currentStepTime milliseconds so it's as
+  //  if they where playing for one frame.
+  const audioContext = vm.runtime.audioEngine.audioContext;
+  for (const target of vm.runtime.targets) {
+    for (const soundId of Object.keys(target.sprite.soundBank.soundPlayers)) {
+      const soundPlayer = target.sprite.soundBank.soundPlayers[soundId];
+      if (soundPlayer.outputNode) {
+        soundPlayer.outputNode.stop(audioContext.currentTime);
+        soundPlayer._createSource();
+        soundPlayer.outputNode.start(
+          audioContext.currentTime,
+          audioContext.currentTime - soundPlayer.startingUntil + vm.runtime.currentStepTime / 1000
+        );
+        soundPlayer.startingUntil -= vm.runtime.currentStepTime / 1000;
+      }
+    }
+  }
+  // Delete stopped threads
+  vm.runtime.threads = vm.runtime.threads.filter((thread) => !isThreadStopped(thread));
+  // Move all threads forward one frame in time. For blocks like `wait () seconds`
+  for (const thread of vm.runtime.threads) {
+    if (pausedThreadState.has(thread)) {
+      pausedThreadState.get(thread).time += vm.runtime.currentStepTime;
+    }
+  }
 };
 
 export const setup = (addon) => {
