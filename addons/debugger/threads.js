@@ -1,4 +1,12 @@
-import { onPauseChanged, isPaused, singleStep, onSingleStep, getRunningThread, getSteppingThreads, isThreadStopped } from "./module.js";
+import {
+  onPauseChanged,
+  isPaused,
+  singleStep,
+  onSingleStep,
+  getRunningThread,
+  getSteppingThreads,
+  isThreadStopped,
+} from "./module.js";
 import LogView from "./log-view.js";
 import Highlighter from "../editor-stepping/highlighter.js";
 
@@ -69,7 +77,7 @@ export default async function createThreadsTab({ debug, addon, console, msg }) {
       root.appendChild(div);
     }
 
-    if(row.type === "stop-all-separator") {
+    if (row.type === "stop-all-separator") {
       const div = document.createElement("div");
       div.textContent = msg("stop-all-separator");
       div.className = "sa-debugger-stop-all-separator";
@@ -204,15 +212,15 @@ export default async function createThreadsTab({ debug, addon, console, msg }) {
         concatInPlace(result, createThreadInfo(thread, 0));
       }
       return result;
-    }
+    };
 
     const steppingThreads = getSteppingThreads();
     const runtimeThreads = vm.runtime.threads;
     concatInPlace(newRows, createThreadListInfo(steppingThreads));
-    if(steppingThreads !== runtimeThreads) {
+    if (steppingThreads !== runtimeThreads) {
       newRows.push({
         type: "stop-all-separator",
-        depth: 0
+        depth: 0,
       });
       concatInPlace(newRows, createThreadListInfo(runtimeThreads));
     }
