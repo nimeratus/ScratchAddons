@@ -15,6 +15,9 @@ let deletedClones = new WeakSet();
 
 let steppingThread = null;
 
+let savedThreadList = null;
+const getSteppingThreads = () => savedThreadList || vm.runtime.threads;
+
 const eventTarget = new EventTarget();
 
 let audioContextStateChange = Promise.resolve();
@@ -100,15 +103,20 @@ const compensateForTimePassedWhilePaused = (thread, pauseState) => {
 const stepUnsteppedThreads = (lastSteppedThread) => {
   // If we paused in the middle of a tick, we need to make sure to step the scripts that didn't get
   // stepped in that tick to avoid affecting project behavior.
-  const threads = vm.runtime.threads;
+  const threads = getSteppingThreads();
   const startingIndex = getThreadIndex(lastSteppedThread);
   if (startingIndex !== -1) {
     for (let i = startingIndex; i < threads.length; i++) {
       const thread = threads[i];
-      const status = thread.status;
-      if (status === STATUS_RUNNING || status === STATUS_YIELD || status === STATUS_YIELD_TICK) {
-        vm.runtime.sequencer.activeThread = thread;
-        vm.runtime.sequencer.stepThread(thread);
+      unfreezePausedThread(thread);
+      try {
+        const status = thread.status;
+        if (status === STATUS_RUNNING || status === STATUS_YIELD || status === STATUS_YIELD_TICK) {
+          vm.runtime.sequencer.activeThread = thread;
+          vm.runtime.sequencer.stepThread(thread);
+        }
+      } finally {
+        freezeThreadIfPaused(thread);
       }
     }
   }
@@ -141,19 +149,20 @@ export const setPaused = (_paused) => {
 
   // Only run unpausing logic when pause state changed to avoid unnecessary work
   if (!paused && didChange) {
-    audioContextStateChange = audioContextStateChange.then(() => {
-      return vm.runtime.audioEngine.audioContext.resume();
-    });
-    vm.runtime.ioDevices.clock.resume();
+    const lastSteppedThread = steppingThread;
+    // This must happen after the "change" event is fired to fix https://github.com/ScratchAddons/ScratchAddons/issues/4281
+    stepUnsteppedThreads(lastSteppedThread);
+    simulateEndOfTick();
+
     for (const thread of vm.runtime.threads) {
       unfreezePausedThread(thread);
     }
     pausedThreadState = new WeakMap();
 
-    const lastSteppedThread = steppingThread;
-    // This must happen after the "change" event is fired to fix https://github.com/ScratchAddons/ScratchAddons/issues/4281
-    stepUnsteppedThreads(lastSteppedThread);
-    simulateEndOfTick();
+    audioContextStateChange = audioContextStateChange.then(() => {
+      return vm.runtime.audioEngine.audioContext.resume();
+    });
+    vm.runtime.ioDevices.clock.resume();
   }
 };
 
@@ -285,11 +294,12 @@ export const isThreadStopped = (thread) => {
 };
 
 const getThreadIndex = (thread) => {
-  // We can't use vm.runtime.threads.indexOf(thread) because threads can be restarted.
+  // We can't use threadList.indexOf(thread) because threads can be restarted.
   // This can happens when, for example, a "when I receive message1" script broadcasts message1.
   // The object in runtime.threads is replaced when this happens.
   if (!thread) return -1;
-  return vm.runtime.threads.findIndex(
+  const threadList = getSteppingThreads();
+  return threadList.findIndex(
     (otherThread) =>
       otherThread.target === thread.target &&
       otherThread.topBlock === thread.topBlock &&
@@ -299,7 +309,7 @@ const getThreadIndex = (thread) => {
 };
 
 const findNewSteppingThread = (startingIndex) => {
-  const threads = vm.runtime.threads;
+  const threads = getSteppingThreads();
   for (let i = startingIndex; i < threads.length; i++) {
     const possibleNewThread = threads[i];
     if (possibleNewThread.updateMonitor) {
@@ -361,6 +371,8 @@ export const singleStep = () => {
 };
 
 const simulateEndOfTick = () => {
+  // Switch back to the runtime's version of the thread list
+  savedThreadList = null;
   // Emulate one frame of time passing.
   vm.runtime.ioDevices.clock._pausedTime += vm.runtime.currentStepTime;
   // Skip all sounds forward by vm.runtime.currentStepTime milliseconds so it's as
@@ -461,6 +473,13 @@ export const setup = (addon) => {
   // Record if a clone is deleted, to let despawning its threads
   vm.runtime.on("targetWasRemoved", function (target) {
     deletedClones.add(target);
+  });
+
+  // When a "stop all" block runs while paused, save the thread list to let stepping through the rest of it like the sequencer does
+  vm.runtime.on("PROJECT_STOP_ALL", function () {
+    if (preventStoppingPausedThreads && !savedThreadList) {
+      savedThreadList = vm.runtime.threads;
+    }
   });
 
   // Paused threads should not be counted as running when updating GUI state.
