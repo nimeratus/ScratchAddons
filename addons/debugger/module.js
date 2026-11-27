@@ -130,9 +130,11 @@ export const setPaused = (_paused) => {
     if (!vm.runtime.ioDevices.clock._paused) {
       vm.runtime.ioDevices.clock.pause();
     }
-    for (const thread of vm.runtime.threads) {
-      if (!canDeleteThreadBeforeEndOfTick(thread)) {
-        pauseThread(thread);
+    for (const threadList of [vm.runtime.threads, getSteppingThreads()]) {
+      for (const thread of threadList) {
+        if (!canDeleteThreadBeforeEndOfTick(thread)) {
+          pauseThread(thread);
+        }
       }
     }
 
@@ -442,8 +444,11 @@ export const setup = (addon) => {
           freezeThreadIfPaused(thread);
         }
       }
-      blocksAreRunning = true;
+    } else {
+      // when pausing in a tick where the project has already recovered from a "stop all", don't try to go back to the old thread list
+      savedThreadList = null;
     }
+    blocksAreRunning = true;
     try {
       return originalStepThreads.call(this);
     } finally {
