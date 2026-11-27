@@ -20,16 +20,18 @@ let audioContextStateChange = Promise.resolve();
 export const isPaused = () => paused;
 
 const pauseThread = (thread) => {
-  if (thread.updateMonitor || pausedThreadState.has(thread)) {
-    // Thread is already paused or shouldn't be paused.
+  if (thread.updateMonitor) {
+    // Monitor threads shouldn't be paused.
     return;
   }
 
-  const pauseState = {
-    time: vm.runtime.currentMSecs,
-    status: thread.status,
-  };
-  pausedThreadState.set(thread, pauseState);
+  if (!pausedThreadState.has(thread)) {
+    const pauseState = {
+      time: vm.runtime.currentMSecs,
+      status: thread.status,
+    };
+    pausedThreadState.set(thread, pauseState);
+  }
 
   // Pausing a thread now works by just setting its status to STATUS_PROMISE_WAIT.
   // At the start of each frame, we make sure each paused thread is still paused.
@@ -39,10 +41,10 @@ const pauseThread = (thread) => {
   //    very hot functions to be deoptimized.
   // Trapping sequencer.stepThread to no-op for a paused thread causes Scratch's sequencer
   //    to waste 24ms of CPU time every frame because it thinks a thread is running.
-  thread.status = STATUS_PROMISE_WAIT;
+  freezeThreadIfPaused(thread);
 };
 
-const ensurePausedThreadIsStillPaused = (thread) => {
+const freezeThreadIfPaused = (thread) => {
   if (thread.status === STATUS_DONE) {
     // If a paused thread is finished by single stepping, let it keep being done.
     return;
@@ -55,6 +57,18 @@ const ensurePausedThreadIsStillPaused = (thread) => {
       thread.status = STATUS_PROMISE_WAIT;
     }
   }
+};
+
+const unpauseThread = (thread) => {
+  // if something changed about the thread since it was paused, update the pauseState
+  freezeThreadIfPaused(thread);
+  // unpause
+  const pauseState = pausedThreadState.get(thread);
+  if (pauseState) {
+    compensateForTimePassedWhilePaused(thread, pauseState);
+    thread.status = pauseState.status;
+  }
+  pausedThreadState.delete(thread);
 };
 
 const setSteppingThread = (thread) => {
@@ -116,11 +130,7 @@ export const setPaused = (_paused) => {
     });
     vm.runtime.ioDevices.clock.resume();
     for (const thread of vm.runtime.threads) {
-      const pauseState = pausedThreadState.get(thread);
-      if (pauseState) {
-        compensateForTimePassedWhilePaused(thread, pauseState);
-        thread.status = pauseState.status;
-      }
+      unpauseThread(thread);
     }
     pausedThreadState = new WeakMap();
 
@@ -145,7 +155,7 @@ export const getRunningThread = () => steppingThread;
 // https://github.com/scratchfoundation/scratch-vm/blob/0e86a78a00db41af114df64255e2cd7dd881329f/src/engine/sequencer.js#L179
 // Returns if we should continue executing this thread.
 const singleStepThread = (thread) => {
-  if (thread.status === STATUS_DONE) {
+  if (thread.status === STATUS_DONE || thread.status === STATUS_PROMISE_WAIT) {
     return false;
   }
 
@@ -235,11 +245,6 @@ const singleStepThread = (thread) => {
       enumerable: true,
       writable: true,
     });
-
-    // Strictly this doesn't seem to be necessary, but let's make sure the thread is still paused after we step it.
-    if (thread.status !== STATUS_DONE) {
-      thread.status = STATUS_PROMISE_WAIT;
-    }
   }
 };
 
@@ -275,7 +280,7 @@ const findNewSteppingThread = (startingIndex) => {
     }
     const status = getRealStatus(possibleNewThread);
     if (status === STATUS_RUNNING || status === STATUS_YIELD || status === STATUS_YIELD_TICK) {
-      // Thread must not be running for single stepping to work.
+      // Pause thread to let highlighting a block to be stepped next.
       pauseThread(possibleNewThread);
       return possibleNewThread;
     }
@@ -285,15 +290,15 @@ const findNewSteppingThread = (startingIndex) => {
 
 export const singleStep = () => {
   if (steppingThread) {
-    const pauseState = pausedThreadState.get(steppingThread);
-    // We can assume pauseState is defined as any single stepping threads must already be paused.
-
-    // Make it look like no time has passed
-    compensateForTimePassedWhilePaused(steppingThread, pauseState);
-    pauseState.time = vm.runtime.currentMSecs;
+    unpauseThread(steppingThread);
 
     // Execute the block
-    const continueExecuting = singleStepThread(steppingThread);
+    let continueExecuting;
+    try {
+      continueExecuting = singleStepThread(steppingThread);
+    } finally {
+      pauseThread(steppingThread);
+    }
 
     if (!continueExecuting) {
       // Try to move onto the next thread
@@ -360,7 +365,7 @@ export const setup = (addon) => {
   vm.runtime.sequencer.stepThreads = function () {
     if (isPaused()) {
       for (const thread of this.runtime.threads) {
-        ensurePausedThreadIsStillPaused(thread);
+        freezeThreadIfPaused(thread);
       }
     }
     return originalStepThreads.call(this);
