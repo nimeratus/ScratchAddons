@@ -10,11 +10,14 @@ let vm;
 let paused = false;
 let pausedThreadState = new WeakMap();
 let pauseNewThreads = false;
-let catchStoppingPausedThreads = false;
+let blocksAreRunning = false;
 
 let deletedClones = new WeakSet();
 
 let steppingThread = null;
+
+let savedThreadList = null;
+const getSteppingThreads = () => savedThreadList || vm.runtime.threads;
 
 const eventTarget = new EventTarget();
 
@@ -98,7 +101,7 @@ const compensateForTimePassedWhilePaused = (thread, pauseState) => {
 const stepUnsteppedThreads = (lastSteppedThread) => {
   // If we paused in the middle of a tick, we need to make sure to step the scripts that didn't get
   // stepped in that tick to avoid affecting project behavior.
-  const threads = vm.runtime.threads;
+  const threads = getSteppingThreads();
   const startingIndex = getThreadIndex(lastSteppedThread);
   if (startingIndex !== -1) {
     for (let i = startingIndex; i < threads.length; i++) {
@@ -146,15 +149,24 @@ export const setPaused = (_paused) => {
       return vm.runtime.audioEngine.audioContext.resume();
     });
     vm.runtime.ioDevices.clock.resume();
-    for (const thread of vm.runtime.threads) {
-      unpauseThread(thread);
-    }
-    pausedThreadState = new WeakMap();
 
     const lastSteppedThread = steppingThread;
+    // unpause the threads used by stepUnsteppedThreads()
+    for (const thread of getSteppingThreads()) {
+      unpauseThread(thread);
+    }
     // This must happen after the "change" event is fired to fix https://github.com/ScratchAddons/ScratchAddons/issues/4281
     stepUnsteppedThreads(lastSteppedThread);
-    steppingThread = null;
+    // recheck, as we might have hit a breakpoint
+    if (!paused) {
+      steppingThread = null;
+      cleanThreadListAtEndOfTick();
+      // unpause threads for next VM tick (might be a different list of threads, if a "stop all" has ran)
+      for (const thread of vm.runtime.threads) {
+        unpauseThread(thread);
+      }
+      pausedThreadState = new WeakMap();
+    }
   }
 };
 
@@ -173,7 +185,7 @@ export const getRunningThread = () => steppingThread;
 // Returns if we should continue executing this thread.
 const singleStepThread = (thread) => {
   unpauseThread(steppingThread);
-  pauseNewThreads = catchStoppingPausedThreads = true;
+  pauseNewThreads = blocksAreRunning = true;
 
   try {
   if (thread.status === STATUS_DONE || thread.status === STATUS_PROMISE_WAIT) {
@@ -269,7 +281,7 @@ const singleStepThread = (thread) => {
     });
   }
   } finally {
-    pauseNewThreads = catchStoppingPausedThreads = false;
+    pauseNewThreads = blocksAreRunning = false;
     pauseThread(thread);
   }
 };
@@ -311,11 +323,11 @@ const canDeleteThreadBeforeEndOfTick = (thread) => {
 };
 
 const getThreadIndex = (thread) => {
-  // We can't use vm.runtime.threads.indexOf(thread) because threads can be restarted.
+  // We can't use threads.indexOf(thread) because threads can be restarted.
   // This can happens when, for example, a "when I receive message1" script broadcasts message1.
   // The object in runtime.threads is replaced when this happens.
   if (!thread) return -1;
-  return vm.runtime.threads.findIndex(
+  return getSteppingThreads().findIndex(
     (otherThread) =>
       otherThread.target === thread.target &&
       otherThread.topBlock === thread.topBlock &&
@@ -325,7 +337,7 @@ const getThreadIndex = (thread) => {
 };
 
 const findNewSteppingThread = (startingIndex) => {
-  const threads = vm.runtime.threads;
+  const threads = getSteppingThreads();
   for (let i = startingIndex; i < threads.length; i++) {
     const possibleNewThread = threads[i];
     if (possibleNewThread.updateMonitor) {
@@ -357,8 +369,7 @@ export const singleStep = () => {
   if (!steppingThread) {
     // End of VM step.
 
-    // Delete stopped threads.
-    vm.runtime.threads = vm.runtime.threads.filter((thread) => !isThreadStopped(thread));
+    cleanThreadListAtEndOfTick();
 
     // Try to run edge activated hats
     // Do this before incrementing the timer, to prevent breaking "when timer > (variable set to timer in last frame)"
@@ -408,6 +419,11 @@ export const singleStep = () => {
   eventTarget.dispatchEvent(new CustomEvent("step"));
 };
 
+const cleanThreadListAtEndOfTick = () => {
+  savedThreadList = null;
+  vm.runtime.threads = vm.runtime.threads.filter((thread) => !isThreadStopped(thread));
+};
+
 export const setup = (addon) => {
   if (vm) {
     return;
@@ -426,12 +442,12 @@ export const setup = (addon) => {
           freezeThreadIfPaused(thread);
         }
       }
-      catchStoppingPausedThreads = true;
+      blocksAreRunning = true;
     }
     try {
       return originalStepThreads.call(this);
     } finally {
-      catchStoppingPausedThreads = false;
+      blocksAreRunning = false;
     }
   };
 
@@ -468,7 +484,7 @@ export const setup = (addon) => {
   const originalRetireThread = vm.runtime.sequencer.retireThread;
   vm.runtime.sequencer.retireThread = function (...args) {
     const out = originalRetireThread.apply(this, args);
-    if (catchStoppingPausedThreads) {
+    if (blocksAreRunning) {
       freezeThreadIfPaused(args[0]);
     }
     return out;
@@ -477,6 +493,14 @@ export const setup = (addon) => {
   // keep track of deleted clones to let letting go of their threads
   vm.runtime.on("targetWasRemoved", function (target) {
     deletedClones.add(target);
+  });
+
+  // Save the thread list at "stop all" blocks to let stepping through the rest of them like the sequencer would do.
+  // Can't do this earlier, because we wouldn't get the hat blocks started later in the tick, as the runtime replaces its thread list with a clone in each tick
+  vm.runtime.on("PROJECT_STOP_ALL", function () {
+    if (blocksAreRunning && !savedThreadList) {
+      savedThreadList = vm.runtime.threads;
+    }
   });
 
   // Paused threads should not be counted as running when updating GUI state.
