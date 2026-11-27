@@ -155,6 +155,10 @@ export const getRunningThread = () => steppingThread;
 // https://github.com/scratchfoundation/scratch-vm/blob/0e86a78a00db41af114df64255e2cd7dd881329f/src/engine/sequencer.js#L179
 // Returns if we should continue executing this thread.
 const singleStepThread = (thread) => {
+  unpauseThread(thread);
+  pauseNewThreads = true;
+
+  try {
   if (thread.status === STATUS_DONE || thread.status === STATUS_PROMISE_WAIT) {
     return false;
   }
@@ -169,7 +173,6 @@ const singleStepThread = (thread) => {
     }
   }
 
-  pauseNewThreads = true;
   vm.runtime.sequencer.activeThread = thread;
 
   /*
@@ -204,6 +207,9 @@ const singleStepThread = (thread) => {
       if (err !== specialError) throw err;
     }
 
+    // in case a breakpoint was triggered
+    unpauseThread(thread);
+
     if (thread.status !== STATUS_RUNNING) {
       return false;
     }
@@ -237,7 +243,6 @@ const singleStepThread = (thread) => {
 
     return true;
   } finally {
-    pauseNewThreads = false;
     vm.runtime.sequencer.activeThread = null;
     Object.defineProperty(thread, "blockGlowInFrame", {
       value: currentBlockId,
@@ -245,6 +250,10 @@ const singleStepThread = (thread) => {
       enumerable: true,
       writable: true,
     });
+  }
+  } finally {
+    pauseNewThreads = false;
+    pauseThread(thread);
   }
 };
 
@@ -290,15 +299,8 @@ const findNewSteppingThread = (startingIndex) => {
 
 export const singleStep = () => {
   if (steppingThread) {
-    unpauseThread(steppingThread);
-
     // Execute the block
-    let continueExecuting;
-    try {
-      continueExecuting = singleStepThread(steppingThread);
-    } finally {
-      pauseThread(steppingThread);
-    }
+    const continueExecuting = singleStepThread(steppingThread);
 
     if (!continueExecuting) {
       // Try to move onto the next thread
