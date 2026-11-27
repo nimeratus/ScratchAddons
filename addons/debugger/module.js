@@ -188,23 +188,23 @@ const singleStepThread = (thread) => {
   pauseNewThreads = blocksAreRunning = true;
 
   try {
-  if (thread.status === STATUS_DONE || thread.status === STATUS_PROMISE_WAIT) {
-    return false;
-  }
-
-  const currentBlockId = thread.peekStack();
-  if (!currentBlockId) {
-    thread.popStack();
-
-    if (thread.stack.length === 0) {
-      thread.status = STATUS_DONE;
+    if (thread.status === STATUS_DONE || thread.status === STATUS_PROMISE_WAIT) {
       return false;
     }
-  }
 
-  vm.runtime.sequencer.activeThread = thread;
+    const currentBlockId = thread.peekStack();
+    if (!currentBlockId) {
+      thread.popStack();
 
-  /*
+      if (thread.stack.length === 0) {
+        thread.status = STATUS_DONE;
+        return false;
+      }
+    }
+
+    vm.runtime.sequencer.activeThread = thread;
+
+    /*
     We need to call execute(this, thread) like the original sequencer. We don't
     have access to that method, so we need to force the original stepThread to run
     execute for us then exit before it tries to run more blocks.
@@ -214,72 +214,72 @@ const singleStepThread = (thread) => {
 
     Why are we here just to suffer?
   */
-  const specialError = ["special error used by Scratch Addons for implementing single-stepping"];
-  Object.defineProperty(thread, "blockGlowInFrame", {
-    set(_block) {
-      throw specialError;
-    },
-  });
-
-  try {
-    thread.status = STATUS_RUNNING;
-
-    // Restart the warp timer on each step.
-    // If we don't do this, Scratch will think a lot of time has passed and may yield this thread.
-    if (thread.warpTimer) {
-      thread.warpTimer.start();
-    }
+    const specialError = ["special error used by Scratch Addons for implementing single-stepping"];
+    Object.defineProperty(thread, "blockGlowInFrame", {
+      set(_block) {
+        throw specialError;
+      },
+    });
 
     try {
-      vm.runtime.sequencer.stepThread(thread);
-    } catch (err) {
-      if (err !== specialError) throw err;
-    }
+      thread.status = STATUS_RUNNING;
 
-    // in case a breakpoint was triggered
-    unpauseThread(thread);
+      // Restart the warp timer on each step.
+      // If we don't do this, Scratch will think a lot of time has passed and may yield this thread.
+      if (thread.warpTimer) {
+        thread.warpTimer.start();
+      }
 
-    if (thread.status !== STATUS_RUNNING) {
-      return false;
-    }
+      try {
+        vm.runtime.sequencer.stepThread(thread);
+      } catch (err) {
+        if (err !== specialError) throw err;
+      }
 
-    if (thread.peekStack() === currentBlockId) {
-      thread.goToNextBlock();
-    }
+      // in case a breakpoint was triggered
+      unpauseThread(thread);
 
-    while (!thread.peekStack()) {
-      thread.popStack();
-
-      if (thread.stack.length === 0) {
-        thread.status = STATUS_DONE;
+      if (thread.status !== STATUS_RUNNING) {
         return false;
       }
 
-      const stackFrame = thread.peekStackFrame();
+      if (thread.peekStack() === currentBlockId) {
+        thread.goToNextBlock();
+      }
 
-      if (stackFrame.isLoop) {
-        if (thread.peekStackFrame().warpMode) {
-          continue;
-        } else {
+      while (!thread.peekStack()) {
+        thread.popStack();
+
+        if (thread.stack.length === 0) {
+          thread.status = STATUS_DONE;
           return false;
         }
-      } else if (stackFrame.waitingReporter) {
-        return false;
+
+        const stackFrame = thread.peekStackFrame();
+
+        if (stackFrame.isLoop) {
+          if (thread.peekStackFrame().warpMode) {
+            continue;
+          } else {
+            return false;
+          }
+        } else if (stackFrame.waitingReporter) {
+          return false;
+        }
+
+        thread.goToNextBlock();
       }
 
-      thread.goToNextBlock();
+      return true;
+    } finally {
+      vm.runtime.sequencer.activeThread = null;
+      Object.defineProperty(thread, "blockGlowInFrame", {
+        value: currentBlockId,
+        configurable: true,
+        enumerable: true,
+        writable: true,
+      });
     }
-
-    return true;
-  } finally {
-    vm.runtime.sequencer.activeThread = null;
-    Object.defineProperty(thread, "blockGlowInFrame", {
-      value: currentBlockId,
-      configurable: true,
-      enumerable: true,
-      writable: true,
-    });
-  }
   } finally {
     pauseNewThreads = blocksAreRunning = false;
     pauseThread(thread);
