@@ -109,7 +109,12 @@ const stepUnsteppedThreads = (lastSteppedThread) => {
       const status = thread.status;
       if (status === STATUS_RUNNING || status === STATUS_YIELD || status === STATUS_YIELD_TICK) {
         vm.runtime.sequencer.activeThread = thread;
-        vm.runtime.sequencer.stepThread(thread);
+        blocksAreRunning = true;
+        try {
+          vm.runtime.sequencer.stepThread(thread);
+        } finally {
+          blocksAreRunning = false;
+        }
       }
     }
   }
