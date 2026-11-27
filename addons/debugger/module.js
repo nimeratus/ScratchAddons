@@ -120,7 +120,10 @@ const stepUnsteppedThreads = (lastSteppedThread) => {
   }
 };
 
+let disablePausing = false;
 export const setPaused = (_paused) => {
+  if (disablePausing) return;
+
   const didChange = paused !== _paused;
   if (didChange) {
     paused = _paused;
@@ -156,6 +159,21 @@ export const setPaused = (_paused) => {
       return vm.runtime.audioEngine.audioContext.resume();
     });
     vm.runtime.ioDevices.clock.resume();
+
+    // Execute 1 block with setPaused() disabled, to prevent getting stuck if we are at a breakpoint.
+    // (When breakpoints are activated, they keep themselves as the next executed block in order to get highlighted)
+    if (steppingThread) {
+      try {
+        disablePausing = true;
+        // part of singleStep() that won't start a new VM step
+        const continueExecuting = singleStepThread(steppingThread);
+        if (!continueExecuting) {
+          steppingThread = findNewSteppingThread(getThreadIndex(steppingThread) + 1);
+        }
+      } finally {
+        disablePausing = false;
+      }
+    }
 
     const lastSteppedThread = steppingThread;
     // unpause the threads used by stepUnsteppedThreads()
